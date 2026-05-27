@@ -1,4 +1,6 @@
 import os
+import csv
+import io
 import json
 import re
 import time
@@ -6,27 +8,28 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-SITE_URL = "https://www.dnyxxg.com/"
-BASE_URL = "https://www.dnyxxg.com"
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID_OTHER")
-
-SEEN_FILE = "seen_dnyxxg.json"
+SHEET_CSV_URL = os.getenv("SHEET_CSV_URL")
 
 
 def clean_text(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def remove_site_links(text):
+def remove_domain_links(text, domain):
     text = text or ""
 
+    if not domain:
+        return text.strip()
+
+    domain = domain.replace("https://", "").replace("http://", "").strip("/")
+    escaped = re.escape(domain)
+
     patterns = [
-        r"https?://www\.dnyxxg\.com\S*",
-        r"https?://dnyxxg\.com\S*",
-        r"www\.dnyxxg\.com\S*",
-        r"dnyxxg\.com\S*",
+        rf"https?://www\.{escaped}\S*",
+        rf"https?://{escaped}\S*",
+        rf"www\.{escaped}\S*",
+        rf"{escaped}\S*",
     ]
 
     for pattern in patterns:
@@ -36,20 +39,20 @@ def remove_site_links(text):
     return text.strip()
 
 
-def load_seen():
-    if not os.path.exists(SEEN_FILE):
+def load_seen(seen_file):
+    if not os.path.exists(seen_file):
         return set()
 
     try:
-        with open(SEEN_FILE, "r", encoding="utf-8") as f:
+        with open(seen_file, "r", encoding="utf-8") as f:
             return set(json.load(f))
     except Exception:
         return set()
 
 
-def save_seen(seen):
-    with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(seen)[-300:], f, ensure_ascii=False, indent=2)
+def save_seen(seen_file, seen):
+    with open(seen_file, "w", encoding="utf-8") as f:
+        json.dump(list(seen)[-500:], f, ensure_ascii=False, indent=2)
 
 
 def get_html(url):
@@ -61,14 +64,54 @@ def get_html(url):
     response = requests.get(url, headers=headers, timeout=25)
     response.raise_for_status()
 
-    # 修复中文乱码
     response.encoding = response.apparent_encoding
 
     return response.text
 
 
-def fetch_articles():
-    html = get_html(SITE_URL)
+def load_sites_from_sheet():
+    if not SHEET_CSV_URL:
+        raise ValueError("SHEET_CSV_URL 没有设置")
+
+    response = requests.get(SHEET_CSV_URL, timeout=25)
+    response.raise_for_status()
+    response.encoding = "utf-8-sig"
+
+    text = response.text
+    reader = csv.DictReader(io.StringIO(text))
+
+    sites = []
+
+    for row in reader:
+        enabled = clean_text(row.get("enabled", "")).lower()
+
+        if enabled not in ["yes", "true", "1", "on", "开启"]:
+            continue
+
+        site = {
+            "name": clean_text(row.get("name", "")),
+            "site_url": clean_text(row.get("site_url", "")),
+            "base_url": clean_text(row.get("base_url", "")),
+            "chat_id": clean_text(row.get("chat_id", "")),
+            "seen_file": clean_text(row.get("seen_file", "")) or "seen.json",
+            "max_articles": int(clean_text(row.get("max_articles", "")) or 5),
+            "max_chars": int(clean_text(row.get("max_chars", "")) or 500),
+            "send_image": clean_text(row.get("send_image", "")).lower() in ["yes", "true", "1", "on", "是"],
+            "remove_domain": clean_text(row.get("remove_domain", "")),
+        }
+
+        if not site["site_url"] or not site["base_url"] or not site["chat_id"]:
+            print("跳过配置不完整的网站：", site)
+            continue
+
+        sites.append(site)
+
+    print(f"从表格读取到 {len(sites)} 个开启的网站")
+    return sites
+
+
+def fetch_articles(site):
+    html = get_html(site["site_url"])
     soup = BeautifulSoup(html, "html.parser")
 
     articles = []
@@ -91,6 +134,8 @@ def fetch_articles():
         "新闻分类",
         "美食专题",
         "旅游专题",
+        "上一篇",
+        "下一篇",
     ]
 
     category_words = [
@@ -129,9 +174,9 @@ def fetch_articles():
         if title in category_words:
             continue
 
-        link = urljoin(BASE_URL, href)
+        link = urljoin(site["base_url"], href)
 
-        if "dnyxxg.com" not in link:
+        if site["base_url"].replace("https://", "").replace("http://", "") not in link:
             continue
 
         bad_links = [
@@ -149,12 +194,9 @@ def fetch_articles():
         if any(bad in link.lower() for bad in bad_links):
             continue
 
-        path = link.replace(BASE_URL, "").strip("/")
+        path = link.replace(site["base_url"], "").strip("/")
 
-        if not path:
-            continue
-
-        if len(path) < 5:
+        if not path or len(path) < 5:
             continue
 
         articles.append({
@@ -170,15 +212,15 @@ def fetch_articles():
             unique.append(item)
             used.add(item["link"])
 
-    print(f"找到 {len(unique)} 篇文章")
+    print(f"[{site['name']}] 找到 {len(unique)} 篇文章")
 
-    for item in unique[:8]:
+    for item in unique[:site["max_articles"]]:
         print("文章：", item["title"], item["link"])
 
-    return unique[:8]
+    return unique[:site["max_articles"]]
 
 
-def get_summary(article_url):
+def get_summary(article_url, site):
     try:
         html = get_html(article_url)
         soup = BeautifulSoup(html, "html.parser")
@@ -207,7 +249,7 @@ def get_summary(article_url):
 
         for p in soup.find_all("p"):
             text = clean_text(p.get_text())
-            text = remove_site_links(text)
+            text = remove_domain_links(text, site["remove_domain"])
 
             if len(text) < 15:
                 continue
@@ -219,20 +261,20 @@ def get_summary(article_url):
 
         if paragraphs:
             content = " ".join(paragraphs)
-            content = remove_site_links(content)
-            return content[:500]
+            content = remove_domain_links(content, site["remove_domain"])
+            return content[:site["max_chars"]]
 
         desc = soup.find("meta", attrs={"name": "description"})
         if desc and desc.get("content"):
             content = clean_text(desc.get("content"))
-            content = remove_site_links(content)
-            return content[:500]
+            content = remove_domain_links(content, site["remove_domain"])
+            return content[:site["max_chars"]]
 
         og_desc = soup.find("meta", attrs={"property": "og:description"})
         if og_desc and og_desc.get("content"):
             content = clean_text(og_desc.get("content"))
-            content = remove_site_links(content)
-            return content[:500]
+            content = remove_domain_links(content, site["remove_domain"])
+            return content[:site["max_chars"]]
 
         return "暂无更多内容。"
 
@@ -266,14 +308,14 @@ def is_bad_image(image_url):
     return any(word in image_url for word in bad_keywords)
 
 
-def get_image(article_url):
+def get_image(article_url, site):
     try:
         html = get_html(article_url)
         soup = BeautifulSoup(html, "html.parser")
 
         og_image = soup.find("meta", attrs={"property": "og:image"})
         if og_image and og_image.get("content"):
-            image_url = urljoin(BASE_URL, og_image.get("content"))
+            image_url = urljoin(site["base_url"], og_image.get("content"))
 
             if not is_bad_image(image_url):
                 print("使用 og:image：", image_url)
@@ -281,7 +323,7 @@ def get_image(article_url):
 
         twitter_image = soup.find("meta", attrs={"name": "twitter:image"})
         if twitter_image and twitter_image.get("content"):
-            image_url = urljoin(BASE_URL, twitter_image.get("content"))
+            image_url = urljoin(site["base_url"], twitter_image.get("content"))
 
             if not is_bad_image(image_url):
                 print("使用 twitter:image：", image_url)
@@ -298,7 +340,7 @@ def get_image(article_url):
             if not src:
                 continue
 
-            image_url = urljoin(BASE_URL, src)
+            image_url = urljoin(site["base_url"], src)
 
             if is_bad_image(image_url):
                 continue
@@ -314,13 +356,13 @@ def get_image(article_url):
         return None
 
 
-def send_text_to_telegram(text):
-    text = remove_site_links(text)
+def send_text_to_telegram(chat_id, text, remove_domain=""):
+    text = remove_domain_links(text, remove_domain)
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     response = requests.post(url, data={
-        "chat_id": CHAT_ID,
+        "chat_id": chat_id,
         "text": text[:3900],
         "disable_web_page_preview": True,
     }, timeout=25)
@@ -331,23 +373,22 @@ def send_text_to_telegram(text):
     response.raise_for_status()
 
 
-def send_to_telegram(title, summary, image_url=None):
-    title = remove_site_links(title)
-    summary = remove_site_links(summary)
+def send_to_telegram(site, title, summary, image_url=None):
+    title = remove_domain_links(title, site["remove_domain"])
+    summary = remove_domain_links(summary, site["remove_domain"])
 
-    # 注意：这里没有放 link，所以不会发网站链接
     caption = f"""📰 {title}
 
 {summary}
 """
 
-    caption = remove_site_links(caption)
+    caption = remove_domain_links(caption, site["remove_domain"])
 
-    if image_url:
+    if site["send_image"] and image_url:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
         response = requests.post(url, data={
-            "chat_id": CHAT_ID,
+            "chat_id": site["chat_id"],
             "photo": image_url,
             "caption": caption[:1000],
         }, timeout=25)
@@ -360,18 +401,15 @@ def send_to_telegram(title, summary, image_url=None):
 
         print("图片发送失败，改发文字")
 
-    send_text_to_telegram(caption)
+    send_text_to_telegram(site["chat_id"], caption, site["remove_domain"])
 
 
-def main():
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN 没有设置")
+def process_site(site):
+    print("=" * 50)
+    print("开始处理网站：", site["name"])
 
-    if not CHAT_ID:
-        raise ValueError("CHAT_ID_OTHER 没有设置")
-
-    seen = load_seen()
-    articles = fetch_articles()
+    seen = load_seen(site["seen_file"])
+    articles = fetch_articles(site)
 
     count = 0
 
@@ -384,19 +422,32 @@ def main():
 
         print("准备发布：", title)
 
-        summary = get_summary(link)
-        image_url = get_image(link)
+        summary = get_summary(link, site)
+        image_url = get_image(link, site) if site["send_image"] else None
 
-        send_to_telegram(title, summary, image_url)
+        send_to_telegram(site, title, summary, image_url)
 
         seen.add(link)
         count += 1
 
         time.sleep(2)
 
-    save_seen(seen)
+    save_seen(site["seen_file"], seen)
 
-    print(f"完成，本次发布 {count} 篇")
+    print(f"[{site['name']}] 完成，本次发布 {count} 篇")
+
+
+def main():
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN 没有设置")
+
+    sites = load_sites_from_sheet()
+
+    for site in sites:
+        try:
+            process_site(site)
+        except Exception as e:
+            print(f"处理网站失败：{site.get('name')}，错误：{e}")
 
 
 if __name__ == "__main__":
