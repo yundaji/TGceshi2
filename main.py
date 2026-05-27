@@ -44,7 +44,7 @@ def get_html(url):
     response = requests.get(url, headers=headers, timeout=25)
     response.raise_for_status()
 
-    # 解决中文乱码问题
+    # 修复中文乱码
     response.encoding = response.apparent_encoding
 
     return response.text
@@ -210,23 +210,75 @@ def get_summary(article_url):
         return "暂无更多内容。"
 
 
+def is_bad_image(image_url):
+    image_url = (image_url or "").lower()
+
+    bad_keywords = [
+        "logo",
+        "icon",
+        "favicon",
+        "qrcode",
+        "qr",
+        "wechat",
+        "weixin",
+        "avatar",
+        "default",
+        "banner",
+        "ad",
+        "ads",
+        "loading",
+        "placeholder",
+        "blank",
+        "sprite",
+    ]
+
+    return any(word in image_url for word in bad_keywords)
+
+
 def get_image(article_url):
     try:
         html = get_html(article_url)
         soup = BeautifulSoup(html, "html.parser")
 
+        # 1. 优先取文章封面图
         og_image = soup.find("meta", attrs={"property": "og:image"})
         if og_image and og_image.get("content"):
-            return urljoin(BASE_URL, og_image.get("content"))
+            image_url = urljoin(BASE_URL, og_image.get("content"))
 
+            if not is_bad_image(image_url):
+                print("使用 og:image：", image_url)
+                return image_url
+
+        # 2. 再取 twitter:image
         twitter_image = soup.find("meta", attrs={"name": "twitter:image"})
         if twitter_image and twitter_image.get("content"):
-            return urljoin(BASE_URL, twitter_image.get("content"))
+            image_url = urljoin(BASE_URL, twitter_image.get("content"))
 
-        img = soup.find("img")
-        if img and img.get("src"):
-            return urljoin(BASE_URL, img.get("src"))
+            if not is_bad_image(image_url):
+                print("使用 twitter:image：", image_url)
+                return image_url
 
+        # 3. 再从正文图片里找
+        for img in soup.find_all("img"):
+            src = (
+                img.get("src")
+                or img.get("data-src")
+                or img.get("data-original")
+                or img.get("data-lazy-src")
+            )
+
+            if not src:
+                continue
+
+            image_url = urljoin(BASE_URL, src)
+
+            if is_bad_image(image_url):
+                continue
+
+            print("使用正文图片：", image_url)
+            return image_url
+
+        print("没有找到合适图片")
         return None
 
     except Exception as e:
