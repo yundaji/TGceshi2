@@ -43,6 +43,10 @@ def get_html(url):
 
     response = requests.get(url, headers=headers, timeout=25)
     response.raise_for_status()
+
+    # 解决中文乱码问题
+    response.encoding = response.apparent_encoding
+
     return response.text
 
 
@@ -62,16 +66,50 @@ def fetch_articles():
         "XML地图",
         "English",
         "EN",
+        "专题",
+        "标签",
+        "热门",
+        "排行榜",
+        "快速链接",
+        "新闻分类",
+        "美食专题",
+        "旅游专题",
+    ]
+
+    category_words = [
+        "东盟新闻",
+        "社会新闻",
+        "国际新闻",
+        "文旅频道",
+        "财经新闻",
+        "娱乐新闻",
+        "国内新闻",
+        "南亚视窗",
+        "图行天下",
+        "美食特产",
+        "泰国",
+        "越南",
+        "柬埔寨",
+        "印尼",
+        "马来西亚",
+        "新加坡",
+        "老挝",
+        "缅甸",
+        "菲律宾",
+        "文莱",
     ]
 
     for a in soup.find_all("a", href=True):
         title = clean_text(a.get_text())
         href = a.get("href", "")
 
-        if len(title) < 10:
+        if len(title) < 14:
             continue
 
         if any(word in title for word in skip_words):
+            continue
+
+        if title in category_words:
             continue
 
         link = urljoin(BASE_URL, href)
@@ -81,12 +119,25 @@ def fetch_articles():
 
         bad_links = [
             "/tags/",
+            "/tag/",
             "/search",
             "/sitemap",
+            "/list/",
+            "/category/",
+            "/about",
+            "/contact",
             "#",
         ]
 
         if any(bad in link.lower() for bad in bad_links):
+            continue
+
+        path = link.replace(BASE_URL, "").strip("/")
+
+        if not path:
+            continue
+
+        if len(path) < 5:
             continue
 
         articles.append({
@@ -103,6 +154,10 @@ def fetch_articles():
             used.add(item["link"])
 
     print(f"找到 {len(unique)} 篇文章")
+
+    for item in unique[:8]:
+        print("文章：", item["title"], item["link"])
+
     return unique[:8]
 
 
