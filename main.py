@@ -166,14 +166,6 @@ def get_summary(article_url):
         html = get_html(article_url)
         soup = BeautifulSoup(html, "html.parser")
 
-        desc = soup.find("meta", attrs={"name": "description"})
-        if desc and desc.get("content"):
-            return clean_text(desc.get("content"))[:500]
-
-        og_desc = soup.find("meta", attrs={"property": "og:description"})
-        if og_desc and og_desc.get("content"):
-            return clean_text(og_desc.get("content"))[:500]
-
         paragraphs = []
 
         bad_words = [
@@ -187,12 +179,19 @@ def get_summary(article_url):
             "免责声明",
             "责任编辑",
             "来源",
+            "上一篇",
+            "下一篇",
+            "分享到",
+            "微信",
+            "微博",
+            "打印",
+            "收藏",
         ]
 
         for p in soup.find_all("p"):
             text = clean_text(p.get_text())
 
-            if len(text) < 20:
+            if len(text) < 15:
                 continue
 
             if any(word in text for word in bad_words):
@@ -201,7 +200,16 @@ def get_summary(article_url):
             paragraphs.append(text)
 
         if paragraphs:
-            return " ".join(paragraphs[:4])[:500]
+            content = " ".join(paragraphs)
+            return content[:500]
+
+        desc = soup.find("meta", attrs={"name": "description"})
+        if desc and desc.get("content"):
+            return clean_text(desc.get("content"))[:500]
+
+        og_desc = soup.find("meta", attrs={"property": "og:description"})
+        if og_desc and og_desc.get("content"):
+            return clean_text(og_desc.get("content"))[:500]
 
         return "暂无更多内容。"
 
@@ -240,7 +248,6 @@ def get_image(article_url):
         html = get_html(article_url)
         soup = BeautifulSoup(html, "html.parser")
 
-        # 1. 优先取文章封面图
         og_image = soup.find("meta", attrs={"property": "og:image"})
         if og_image and og_image.get("content"):
             image_url = urljoin(BASE_URL, og_image.get("content"))
@@ -249,7 +256,6 @@ def get_image(article_url):
                 print("使用 og:image：", image_url)
                 return image_url
 
-        # 2. 再取 twitter:image
         twitter_image = soup.find("meta", attrs={"name": "twitter:image"})
         if twitter_image and twitter_image.get("content"):
             image_url = urljoin(BASE_URL, twitter_image.get("content"))
@@ -258,7 +264,6 @@ def get_image(article_url):
                 print("使用 twitter:image：", image_url)
                 return image_url
 
-        # 3. 再从正文图片里找
         for img in soup.find_all("img"):
             src = (
                 img.get("src")
