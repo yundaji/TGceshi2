@@ -307,6 +307,7 @@ def send_text_to_telegram(text):
 
 
 def send_to_telegram(title, summary, image_url=None):
+    # 注意：这里没有放 link，所以不会发网站链接
     caption = f"""📰 {title}
 
 {summary}
