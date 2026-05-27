@@ -19,6 +19,23 @@ def clean_text(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def remove_site_links(text):
+    text = text or ""
+
+    patterns = [
+        r"https?://www\.dnyxxg\.com\S*",
+        r"https?://dnyxxg\.com\S*",
+        r"www\.dnyxxg\.com\S*",
+        r"dnyxxg\.com\S*",
+    ]
+
+    for pattern in patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 def load_seen():
     if not os.path.exists(SEEN_FILE):
         return set()
@@ -190,6 +207,7 @@ def get_summary(article_url):
 
         for p in soup.find_all("p"):
             text = clean_text(p.get_text())
+            text = remove_site_links(text)
 
             if len(text) < 15:
                 continue
@@ -201,15 +219,20 @@ def get_summary(article_url):
 
         if paragraphs:
             content = " ".join(paragraphs)
+            content = remove_site_links(content)
             return content[:500]
 
         desc = soup.find("meta", attrs={"name": "description"})
         if desc and desc.get("content"):
-            return clean_text(desc.get("content"))[:500]
+            content = clean_text(desc.get("content"))
+            content = remove_site_links(content)
+            return content[:500]
 
         og_desc = soup.find("meta", attrs={"property": "og:description"})
         if og_desc and og_desc.get("content"):
-            return clean_text(og_desc.get("content"))[:500]
+            content = clean_text(og_desc.get("content"))
+            content = remove_site_links(content)
+            return content[:500]
 
         return "暂无更多内容。"
 
@@ -292,6 +315,8 @@ def get_image(article_url):
 
 
 def send_text_to_telegram(text):
+    text = remove_site_links(text)
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     response = requests.post(url, data={
@@ -307,11 +332,16 @@ def send_text_to_telegram(text):
 
 
 def send_to_telegram(title, summary, image_url=None):
+    title = remove_site_links(title)
+    summary = remove_site_links(summary)
+
     # 注意：这里没有放 link，所以不会发网站链接
     caption = f"""📰 {title}
 
 {summary}
 """
+
+    caption = remove_site_links(caption)
 
     if image_url:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
