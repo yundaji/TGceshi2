@@ -1,4 +1,4 @@
-name: Auto Post Other Site
+name: Auto Post From Sheet
 
 on:
   schedule:
@@ -27,13 +27,13 @@ jobs:
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID_OTHER: ${{ secrets.CHAT_ID_OTHER }}
+          SHEET_CSV_URL: ${{ secrets.SHEET_CSV_URL }}
         run: python main.py
 
-      - name: Save seen articles
+      - name: Save seen files
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add seen_dnyxxg.json
-          git commit -m "Update seen other site articles" || echo "No changes to commit"
+          git add seen_*.json || echo "No seen files"
+          git commit -m "Update seen files" || echo "No changes to commit"
           git push
