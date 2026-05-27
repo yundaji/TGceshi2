@@ -6,18 +6,13 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-# 这里改成你要抓的网站文章列表页
-SITE_URL = "https://example.com/news"
+SITE_URL = "https://www.dnyxxg.com/"
+BASE_URL = "https://www.dnyxxg.com"
 
-# 这里改成网站首页域名
-BASE_URL = "https://example.com"
-
-# 如果你要发到另一个频道，GitHub Secrets 里设置 CHAT_ID_OTHER
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID_OTHER")
 
-# 新网站建议用新的 seen 文件，避免和旧频道冲突
-SEEN_FILE = "seen_other_site.json"
+SEEN_FILE = "seen_dnyxxg.json"
 
 
 def clean_text(text):
@@ -46,9 +41,9 @@ def get_html(url):
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
 
-    r = requests.get(url, headers=headers, timeout=25)
-    r.raise_for_status()
-    return r.text
+    response = requests.get(url, headers=headers, timeout=25)
+    response.raise_for_status()
+    return response.text
 
 
 def fetch_articles():
@@ -57,29 +52,41 @@ def fetch_articles():
 
     articles = []
 
+    skip_words = [
+        "首页",
+        "更多",
+        "搜索",
+        "导航",
+        "联系我们",
+        "阅读更多",
+        "XML地图",
+        "English",
+        "EN",
+    ]
+
     for a in soup.find_all("a", href=True):
         title = clean_text(a.get_text())
         href = a.get("href", "")
 
-        if len(title) < 8:
+        if len(title) < 10:
+            continue
+
+        if any(word in title for word in skip_words):
             continue
 
         link = urljoin(BASE_URL, href)
 
-        # 通用文章链接判断
-        # 如果抓不到文章，可以把下面这一段改成适合目标网站的关键词
-        article_keywords = [
-            "/news/",
-            "/article/",
-            "/story/",
-            "/post/",
-            "/content/",
-            "/world/",
-            "/china/",
-            "/realtime/",
+        if "dnyxxg.com" not in link:
+            continue
+
+        bad_links = [
+            "/tags/",
+            "/search",
+            "/sitemap",
+            "#",
         ]
 
-        if not any(word in link.lower() for word in article_keywords):
+        if any(bad in link.lower() for bad in bad_links):
             continue
 
         articles.append({
@@ -123,6 +130,8 @@ def get_summary(article_url):
             "版权所有",
             "关注我们",
             "免责声明",
+            "责任编辑",
+            "来源",
         ]
 
         for p in soup.find_all("p"):
@@ -170,6 +179,21 @@ def get_image(article_url):
         return None
 
 
+def send_text_to_telegram(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+    response = requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": text[:3900],
+        "disable_web_page_preview": True,
+    }, timeout=25)
+
+    print("Telegram 状态：", response.status_code)
+    print("Telegram 返回：", response.text)
+
+    response.raise_for_status()
+
+
 def send_to_telegram(title, summary, image_url=None):
     caption = f"""📰 {title}
 
@@ -185,35 +209,15 @@ def send_to_telegram(title, summary, image_url=None):
             "caption": caption[:1000],
         }, timeout=25)
 
-        # 如果图片发送失败，就改成只发文字
-        if response.status_code != 200:
-            print("图片发送失败，改发文字：", response.text)
-            send_text_to_telegram(caption)
+        print("Telegram 状态：", response.status_code)
+        print("Telegram 返回：", response.text)
+
+        if response.status_code == 200:
             return
 
-    else:
-        send_text_to_telegram(caption)
-        return
+        print("图片发送失败，改发文字")
 
-    print("Telegram 状态：", response.status_code)
-    print("Telegram 返回：", response.text)
-
-    response.raise_for_status()
-
-
-def send_text_to_telegram(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-    response = requests.post(url, data={
-        "chat_id": CHAT_ID,
-        "text": text[:3900],
-        "disable_web_page_preview": True,
-    }, timeout=25)
-
-    print("Telegram 状态：", response.status_code)
-    print("Telegram 返回：", response.text)
-
-    response.raise_for_status()
+    send_text_to_telegram(caption)
 
 
 def main():
